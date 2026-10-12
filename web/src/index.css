@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Fallback values; App.tsx overrides these on the document root per active mode. */
+:root {
+  --app-layout-bg: #111827;
+  --app-container-bg: #1f2937;
+  --app-elevated: #374151;
+  --app-border: #374151;
+  --app-text: #f9fafb;
+  --app-text-muted: #9ca3af;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--app-layout-bg);
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* xterm.js custom styling */
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+}

@@ -1,0 +1,17 @@
+{
+  "version": "1.2.0",
+  "category": "app",
+  "keywords": [
+    "ssh-manager"
+  ],
+  "permissions": {
+    "network": [
+      "127.0.0.1"
+    ],
+    "exec": [
+      "./ssh-manager"
+    ]
+  },
+  "updater": "none",
+  "repo_url": "https://github.com/SenClaw/app-ssh-manager"
+}

@@ -1,0 +1,38 @@
+.termius-tab-bar .ant-tabs-nav {
+  margin-bottom: 0 !important;
+}
+
+.termius-tab-bar .ant-tabs-nav::before {
+  border-bottom: none !important;
+}
+
+.termius-tab-bar .ant-tabs-tab {
+  border: none !important;
+  border-radius: 8px 8px 0 0 !important;
+  background: transparent !important;
+  transition: all 0.2s;
+}
+
+.termius-tab-bar .ant-tabs-tab-active {
+  background: var(--app-container-bg) !important; /* same as sidebar background to blend in */
+}
+
+.termius-tab-bar .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--app-text) !important;
+}
+
+.termius-tab-bar .ant-tabs-tab:hover {
+  background: var(--app-elevated) !important;
+}
+
+/* Make search bar blend in better */
+.custom-search .ant-input,
+.custom-search .ant-input-search-button {
+  background-color: var(--app-container-bg) !important;
+  border-color: var(--app-border) !important;
+  color: var(--app-text);
+}
+
+.custom-search .ant-input::placeholder {
+  color: var(--app-text-muted);
+}
