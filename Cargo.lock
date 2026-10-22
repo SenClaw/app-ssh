@@ -2191,7 +2191,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ssh-manager"
+name = "app-ssh"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -1,7 +1,11 @@
 [package]
-name = "ssh-manager"
+name = "app-ssh"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "ssh-manager"
+path = "src/main.rs"
 
 [dependencies]
 # The Space App SDK lives in the SenClaw daemon repo. `branch = "main"` tracks
