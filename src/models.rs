@@ -1,8 +1,11 @@
+use crate::sync::file::write_private;
+use crate::sync::{SyncHook, SyncSource, SyncState, values_of};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,11 +18,16 @@ pub struct Host {
     pub password: Option<String>,
     pub keychain_id: Option<String>,
     pub tags: Vec<String>,
+    /// Fields a newer build wrote that this one does not know. Kept so that a
+    /// record synced through an older build comes out the other side whole.
+    #[serde(flatten, default)]
+    pub extra: Map<String, Value>,
 }
 
 pub struct HostStore {
     hosts: Mutex<HashMap<String, Host>>,
     file_path: String,
+    sync: SyncHook,
 }
 
 impl HostStore {
@@ -37,13 +45,19 @@ impl HostStore {
         HostStore {
             hosts: Mutex::new(hosts),
             file_path: file_path.to_string(),
+            sync: SyncHook::default(),
+        }
+    }
+
+    fn write_file(&self, hosts: &HashMap<String, Host>) {
+        if let Ok(data) = serde_json::to_string_pretty(hosts) {
+            let _ = write_private(Path::new(&self.file_path), data.as_bytes());
         }
     }
 
     fn save(&self, hosts: &HashMap<String, Host>) {
-        if let Ok(data) = serde_json::to_string_pretty(hosts) {
-            let _ = fs::write(&self.file_path, data);
-        }
+        self.write_file(hosts);
+        self.sync.notify("hosts", hosts);
     }
 
     pub fn get_all(&self) -> Vec<Host> {
@@ -103,11 +117,14 @@ pub struct PortForwardingRule {
     pub destination_port: u16,
     #[serde(default)]
     pub active: bool,
+    #[serde(flatten, default)]
+    pub extra: Map<String, Value>,
 }
 
 pub struct PortForwardingStore {
     rules: Mutex<HashMap<String, PortForwardingRule>>,
     file_path: String,
+    sync: SyncHook,
 }
 
 impl PortForwardingStore {
@@ -125,13 +142,19 @@ impl PortForwardingStore {
         PortForwardingStore {
             rules: Mutex::new(rules),
             file_path: file_path.to_string(),
+            sync: SyncHook::default(),
+        }
+    }
+
+    fn write_file(&self, rules: &HashMap<String, PortForwardingRule>) {
+        if let Ok(data) = serde_json::to_string_pretty(rules) {
+            let _ = write_private(Path::new(&self.file_path), data.as_bytes());
         }
     }
 
     fn save(&self, rules: &HashMap<String, PortForwardingRule>) {
-        if let Ok(data) = serde_json::to_string_pretty(rules) {
-            let _ = fs::write(&self.file_path, data);
-        }
+        self.write_file(rules);
+        self.sync.notify("port_forwarding", rules);
     }
 
     pub fn get_all(&self) -> Vec<PortForwardingRule> {
@@ -188,5 +211,98 @@ impl PortForwardingStore {
         } else {
             false
         }
+    }
+}
+
+impl SyncSource for HostStore {
+    fn collection(&self) -> &'static str {
+        "hosts"
+    }
+
+    fn attach(&self, state: Arc<SyncState>) {
+        self.sync.attach(state);
+    }
+
+    fn live(&self) -> Vec<(String, Value)> {
+        values_of(&self.hosts.lock().unwrap())
+    }
+
+    fn get(&self, id: &str) -> Option<Value> {
+        let hosts = self.hosts.lock().unwrap();
+        hosts.get(id).and_then(|h| serde_json::to_value(h).ok())
+    }
+
+    fn put(&self, id: &str, record: Value, notify: bool) -> Result<Value, String> {
+        let mut host: Host = serde_json::from_value(record).map_err(|e| e.to_string())?;
+        host.id = id.to_string();
+        let mut hosts = self.hosts.lock().unwrap();
+        hosts.insert(id.to_string(), host.clone());
+        if notify {
+            self.save(&hosts);
+        } else {
+            self.write_file(&hosts);
+        }
+        serde_json::to_value(&host).map_err(|e| e.to_string())
+    }
+
+    fn remove(&self, id: &str, notify: bool) -> bool {
+        let mut hosts = self.hosts.lock().unwrap();
+        let removed = hosts.remove(id).is_some();
+        if removed {
+            if notify {
+                self.save(&hosts);
+            } else {
+                self.write_file(&hosts);
+            }
+        }
+        removed
+    }
+}
+
+impl SyncSource for PortForwardingStore {
+    fn collection(&self) -> &'static str {
+        "port_forwarding"
+    }
+
+    fn attach(&self, state: Arc<SyncState>) {
+        self.sync.attach(state);
+    }
+
+    fn live(&self) -> Vec<(String, Value)> {
+        values_of(&self.rules.lock().unwrap())
+    }
+
+    fn get(&self, id: &str) -> Option<Value> {
+        let rules = self.rules.lock().unwrap();
+        rules.get(id).and_then(|r| serde_json::to_value(r).ok())
+    }
+
+    fn put(&self, id: &str, record: Value, notify: bool) -> Result<Value, String> {
+        let mut rule: PortForwardingRule = serde_json::from_value(record).map_err(|e| e.to_string())?;
+        rule.id = id.to_string();
+        let mut rules = self.rules.lock().unwrap();
+        // Whether a tunnel is open is this machine's own business: a rule that
+        // arrives is off, and one that is already here keeps its state.
+        rule.active = rules.get(id).map(|r| r.active).unwrap_or(false);
+        rules.insert(id.to_string(), rule.clone());
+        if notify {
+            self.save(&rules);
+        } else {
+            self.write_file(&rules);
+        }
+        serde_json::to_value(&rule).map_err(|e| e.to_string())
+    }
+
+    fn remove(&self, id: &str, notify: bool) -> bool {
+        let mut rules = self.rules.lock().unwrap();
+        let removed = rules.remove(id).is_some();
+        if removed {
+            if notify {
+                self.save(&rules);
+            } else {
+                self.write_file(&rules);
+            }
+        }
+        removed
     }
 }

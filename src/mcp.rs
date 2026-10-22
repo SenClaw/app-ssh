@@ -540,6 +540,7 @@ pub async fn mcp_message(
                 password,
                 keychain_id: None,
                 tags: vec![],
+                extra: Default::default(),
             });
             let result = json!({ "content": [{ "type": "text", "text": "Host added successfully." }
 
@@ -570,6 +571,7 @@ pub async fn mcp_message(
                         password,
                         keychain_id: None,
                         tags: vec![],
+                        extra: Default::default(),
                     },
                 )
                 .is_some()
@@ -1022,6 +1024,7 @@ pub async fn mcp_message(
                     destination_address,
                     destination_port: destination_port as u16,
                     active: false,
+                    extra: Default::default(),
                 });
 
             let outcome = if start {

@@ -10,6 +10,7 @@ mod security;
 mod settings;
 mod snippets;
 mod sftp_api;
+mod sync;
 
 use axum::Router;
 use tower_http::cors::CorsLayer;

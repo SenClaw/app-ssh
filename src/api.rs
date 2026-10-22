@@ -47,6 +47,8 @@ pub struct AppState {
     pub rfs: crate::rfs::SftpCache,
     pub log_store: Arc<LogStore>,
     pub settings: Arc<SettingsStore>,
+    /// Stamps and tombstones for syncing the collections with another device.
+    pub sync: Arc<crate::sync::SyncState>,
 }
 
 pub fn api_router() -> Router {
@@ -66,6 +68,7 @@ pub fn api_router() -> Router {
         .join("space-apps-data")
         .join("ssh-manager");
     std::fs::create_dir_all(&data_dir).unwrap();
+    let sync = crate::sync::SyncState::open(&data_dir);
     let hosts_path = data_dir.join("hosts.json");
     let hosts = HostStore::new(hosts_path.to_str().unwrap());
     let keychain_path = data_dir.join("keychain.json");
@@ -123,7 +126,20 @@ pub fn api_router() -> Router {
         rfs: crate::rfs::SftpCache::new(),
         log_store,
         settings,
+        sync: sync.clone(),
     });
+
+    // Back up and tighten the data files (first run), then start noticing edits.
+    crate::sync::start(
+        &data_dir,
+        &sync,
+        &[
+            &state.keychain,
+            &state.hosts,
+            &state.port_forwarding_store,
+            &state.snippets,
+        ],
+    );
 
     // ssh-manager is a background app: a tunnel the user switched on should be
     // forwarding again after a restart, not merely remembered as "active".
@@ -161,6 +177,14 @@ pub fn api_router() -> Router {
         )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .route("/ws/terminal/:id", get(ws_terminal_handler))
+        // Only the SenClaw daemon may sync: it forwards this app's access token,
+        // and nothing else on the machine has it.
+        .nest(
+            "/sync",
+            crate::sync::http::router().layer(axum::middleware::from_fn(
+                app_space_sdk::auth::require_app_token,
+            )),
+        )
         .with_state(state)
 }
 

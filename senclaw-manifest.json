@@ -59,5 +59,48 @@
       "path": "skills/ssh-connect",
       "triggers": ["kết nối ssh", "connect ssh", "thực hiện lệnh", "vào server"]
     }
-  ]
+  ],
+  "sync": {
+    "version": 1,
+    "endpoint": "/api/sync",
+    "order": ["keychain", "hosts", "port_forwarding", "snippets"],
+    "collections": [
+      {
+        "id": "keychain",
+        "schemaVersion": 1,
+        "secretFields": ["value"],
+        "localFields": [],
+        "matchKey": ["name", "item_type"],
+        "guardFields": [],
+        "refs": []
+      },
+      {
+        "id": "hosts",
+        "schemaVersion": 1,
+        "secretFields": ["password"],
+        "localFields": [],
+        "matchKey": ["host", "port", "user"],
+        "guardFields": ["host", "port", "user", "keychain_id"],
+        "refs": [{ "field": "keychain_id", "target": "keychain" }]
+      },
+      {
+        "id": "port_forwarding",
+        "schemaVersion": 1,
+        "secretFields": [],
+        "localFields": ["active"],
+        "matchKey": ["host_id", "local_port", "destination_address", "destination_port"],
+        "guardFields": [],
+        "refs": [{ "field": "host_id", "target": "hosts" }]
+      },
+      {
+        "id": "snippets",
+        "schemaVersion": 1,
+        "secretFields": [],
+        "localFields": [],
+        "matchKey": ["name"],
+        "guardFields": [],
+        "refs": []
+      }
+    ]
+  }
 }
