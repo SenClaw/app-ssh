@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Modal, Form, Select, Space, Tabs, message, Spin, Typography, Radio } from 'antd';
+import { Button, Modal, Form, Select, Space, Tabs, message, Spin, Typography, Radio, Switch, InputNumber } from 'antd';
 import { useAppTheme } from '../theme';
 
 const { Text } = Typography;
@@ -41,9 +41,12 @@ const ALLOW_OPTIONS = [
 interface Settings {
   theme: string;
   log_retention_seconds: number;
-  ssh_command_policy: 'off' | 'allowlist' | 'denylist' | string;
+  ssh_command_policy: 'smart' | 'off' | 'allowlist' | 'denylist' | string;
   ssh_allowed_commands: string[];
   ssh_denied_commands: string[];
+  ssh_ai_learn: boolean;
+  ssh_system_one: boolean;
+  ssh_system_one_floor: number;
 }
 
 interface Props {
@@ -138,9 +141,9 @@ export const SettingsModal: React.FC<Props> = ({ open, onClose }) => {
                 ssh_execute_command — per-command policy
               </div>
               <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-                Limit which shell commands the AI agent can run via SSH.
-                Matching is on the first token (e.g. <code>rm</code> matches <code>rm -rf /tmp</code>).
-                Per-tool MCP permissions are managed by SenClaw itself.
+                Limit which shell commands the AI agent can run via SSH. Every command of a line is
+                checked (<code>ls; rm -rf /</code> is checked as <code>rm</code> too), including what runs
+                inside <code>$(…)</code>. Per-tool MCP permissions are managed by SenClaw itself.
               </Text>
 
               <Form layout="vertical">
@@ -149,11 +152,59 @@ export const SettingsModal: React.FC<Props> = ({ open, onClose }) => {
                     value={settings.ssh_command_policy}
                     onChange={(e) => persist({ ...settings, ssh_command_policy: e.target.value })}
                   >
+                    <Radio.Button value="smart">Smart (AI review)</Radio.Button>
                     <Radio.Button value="off">Off (allow all)</Radio.Button>
                     <Radio.Button value="allowlist">Allowlist only</Radio.Button>
                     <Radio.Button value="denylist">Denylist</Radio.Button>
                   </Radio.Group>
                 </Form.Item>
+
+                {settings.ssh_command_policy === 'smart' && (
+                  <>
+                    <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                      Read-only commands run at once. Commands that delete, restart, install, change permissions
+                      or read secrets wait for your approval in <b>Approvals</b>. Anything else is reviewed by
+                      SenClaw's model and System One: it runs only if the model rates it low-risk and System One
+                      does not object; otherwise it waits for you too.
+                    </Text>
+                    <Form.Item label="Learn cleared commands" extra="Add a command both reviewers cleared to the learned list, so it runs without a review next time. The list is in Approvals.">
+                      <Switch
+                        checked={settings.ssh_ai_learn}
+                        onChange={(v) => persist({ ...settings, ssh_ai_learn: v })}
+                      />
+                    </Form.Item>
+                    <Form.Item label="Ask System One as well" extra="System One can only send a command to you, never clear one. Measured on 60 server commands it caught 21 of 30 risky ones and flagged 3 of 30 harmless ones at confidence 0.6.">
+                      <Space>
+                        <Switch
+                          checked={settings.ssh_system_one}
+                          onChange={(v) => persist({ ...settings, ssh_system_one: v })}
+                        />
+                        <span style={{ color: palette.textMuted }}>counts from confidence</span>
+                        <InputNumber
+                          min={0.5}
+                          max={0.99}
+                          step={0.05}
+                          value={settings.ssh_system_one_floor}
+                          disabled={!settings.ssh_system_one}
+                          onChange={(v) => v !== null && persist({ ...settings, ssh_system_one_floor: v })}
+                        />
+                      </Space>
+                    </Form.Item>
+                    <Form.Item
+                      label="Always ask for"
+                      extra="Programs that always wait for your approval, whatever the reviewers say."
+                    >
+                      <Select
+                        mode="tags"
+                        value={settings.ssh_denied_commands}
+                        onChange={(v) => persist({ ...settings, ssh_denied_commands: dedup(v) })}
+                        tokenSeparators={[',', ' ']}
+                        placeholder="rm, dd, mkfs, shutdown, reboot, ..."
+                        style={{ width: '100%' }}
+                      />
+                    </Form.Item>
+                  </>
+                )}
 
                 {settings.ssh_command_policy === 'allowlist' && (
                   <Form.Item

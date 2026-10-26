@@ -26,6 +26,7 @@ const SOURCE_COLOR: Record<string, string> = {
   ssh: '#f97316',
   tunnel: '#0ea5e9',
   rfs: '#14b8a6',
+  guard: '#eab308',
   system: '#9ca3af',
 };
 

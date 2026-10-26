@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ConfigProvider, Layout, Menu, Button, Row, Col, Empty, message, Input, Tabs, theme as antdTheme } from 'antd';
-import { DesktopOutlined, KeyOutlined, SwapOutlined, CodeOutlined, PlusOutlined, HomeOutlined, FolderOutlined, SettingOutlined, LayoutOutlined } from '@ant-design/icons';
+import { ConfigProvider, Layout, Menu, Button, Row, Col, Empty, message, notification, Input, Tabs, Badge, theme as antdTheme } from 'antd';
+import { DesktopOutlined, KeyOutlined, SwapOutlined, CodeOutlined, PlusOutlined, HomeOutlined, FolderOutlined, SettingOutlined, LayoutOutlined, SafetyOutlined } from '@ant-design/icons';
 import type { Host, AppTab } from './types';
 import { HostCard } from './components/HostCard';
 import { HostDetails } from './components/HostDetails';
 import { KeychainView } from './components/KeychainView';
 import { PortForwardingView } from './components/PortForwardingView';
 import { LogsView } from './components/LogsView';
+import { ApprovalsView } from './components/ApprovalsView';
 import { SettingsModal } from './components/SettingsModal';
 import { TerminalView } from './TerminalView';
 import { SftpView } from './components/SftpView';
@@ -130,6 +131,8 @@ function Shell() {
   const [activeTabId, setActiveTabId] = useState<string>('home');
   const [currentMenu, setCurrentMenu] = useState<string>('hosts');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Commands waiting for the admin (src/guard), shown as a badge on the menu. */
+  const [pendingApprovals, setPendingApprovals] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return localStorage.getItem('ssh-sidebar-open') !== 'false'; } catch { return true; }
   });
@@ -170,9 +173,29 @@ function Shell() {
           });
         } else if (data.type === "mcp_execute") {
            window.dispatchEvent(new CustomEvent('mcp-log', { detail: data }));
+        } else if (data.type === "guard_approval") {
+          setPendingApprovals(data.pending ?? 0);
+          window.dispatchEvent(new CustomEvent('guard-approval', { detail: data }));
+          const a = data.approval;
+          if (a?.status === 'pending') {
+            notification.warning({
+              key: a.id,
+              message: 'A command is waiting for your approval',
+              description: `${a.target}: ${a.command}`,
+              onClick: () => {
+                setCurrentMenu('approvals');
+                setActiveTabId('home');
+                notification.destroy(a.id);
+              },
+            });
+          }
         }
       } catch (err) {}
     });
+    fetch('./api/guard/approvals')
+      .then(r => r.json())
+      .then((list: { status: string }[]) => setPendingApprovals(list.filter(a => a.status === 'pending').length))
+      .catch(() => {});
     return () => evtSource.close();
   }, []);
 
@@ -301,6 +324,8 @@ function Shell() {
         return <PortForwardingView />;
       case 'logs':
         return <LogsView />;
+      case 'approvals':
+        return <ApprovalsView />;
       default:
         return null;
     }
@@ -372,6 +397,16 @@ function Shell() {
                 { key: 'hosts', icon: <DesktopOutlined />, label: 'Hosts' },
                 { key: 'keychain', icon: <KeyOutlined />, label: 'Keychain' },
                 { key: 'port-forwarding', icon: <SwapOutlined />, label: 'Port Forwarding' },
+                {
+                  key: 'approvals',
+                  icon: <SafetyOutlined />,
+                  label: (
+                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      Approvals
+                      <Badge count={pendingApprovals} size="small" />
+                    </span>
+                  ),
+                },
                 { key: 'logs', icon: <CodeOutlined />, label: 'Logs' },
               ]}
             />

@@ -1,12 +1,13 @@
 mod api;
 mod client;
 pub mod connection;
+mod guard;
 mod keychain;
 mod logs;
 mod mcp;
 mod models;
+mod remote;
 pub mod rfs;
-mod security;
 mod settings;
 mod snippets;
 mod sftp_api;

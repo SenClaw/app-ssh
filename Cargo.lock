@@ -75,6 +75,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "app-ssh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "app-space-sdk",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "dirs",
+ "dotenvy",
+ "futures-util",
+ "reqwest",
+ "russh",
+ "russh-keys",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tower-http 0.5.2",
+ "uuid",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2188,29 +2212,6 @@ dependencies = [
  "ssh-encoding",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "app-ssh"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "app-space-sdk",
- "async-stream",
- "async-trait",
- "axum",
- "dirs",
- "dotenvy",
- "futures-util",
- "russh",
- "russh-keys",
- "russh-sftp",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tower-http 0.5.2",
- "uuid",
 ]
 
 [[package]]

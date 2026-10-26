@@ -9,23 +9,41 @@ pub struct Settings {
     pub theme: String,
     #[serde(default)]
     pub log_retention_seconds: u64,
-    /// Gate for the `ssh_execute_command` MCP tool.
+    /// Gate for the `ssh_execute_command` MCP tool (see `crate::guard`).
     /// "off"       — no filtering
-    /// "allowlist" — only commands in `ssh_allowed_commands` are permitted
-    /// "denylist"  — everything is permitted except commands in `ssh_denied_commands`
+    /// "allowlist" — only programs in `ssh_allowed_commands` are permitted
+    /// "denylist"  — everything is permitted except programs in `ssh_denied_commands`
+    /// "smart"     — read-only commands run, risky ones wait for the admin,
+    ///               the rest are reviewed by the AI and System One
     #[serde(default = "default_ssh_policy")]
     pub ssh_command_policy: String,
     #[serde(default)]
     pub ssh_allowed_commands: Vec<String>,
+    /// The denylist; in "smart" mode, programs that always wait for the admin.
     #[serde(default)]
     pub ssh_denied_commands: Vec<String>,
+    /// "smart": add a command both reviewers cleared to the learned list.
+    #[serde(default = "default_true")]
+    pub ssh_ai_learn: bool,
+    /// "smart": ask System One as well as the model.
+    #[serde(default = "default_true")]
+    pub ssh_system_one: bool,
+    /// "smart": System One's "changes the server" counts from this confidence.
+    #[serde(default = "default_system_one_floor")]
+    pub ssh_system_one_floor: f64,
 }
 
 fn default_theme() -> String {
     "dark".to_string()
 }
 fn default_ssh_policy() -> String {
-    "off".to_string()
+    "smart".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_system_one_floor() -> f64 {
+    0.6
 }
 
 impl Default for Settings {
@@ -45,14 +63,11 @@ impl Default for Settings {
                 "poweroff".into(),
                 ":(){".into(),
             ],
+            ssh_ai_learn: true,
+            ssh_system_one: true,
+            ssh_system_one_floor: default_system_one_floor(),
         }
     }
-}
-
-/// Verdict returned by `Settings::check_ssh_command`.
-pub enum CmdVerdict {
-    Allow,
-    Deny(&'static str),
 }
 
 pub struct SettingsStore {
@@ -90,32 +105,5 @@ impl SettingsStore {
 
     pub fn log_retention(&self) -> u64 {
         self.inner.lock().unwrap().log_retention_seconds
-    }
-
-    /// Check a command line (e.g. "ls -la /tmp") against the configured SSH policy.
-    /// Matching is done on the first whitespace-separated token (the program name).
-    pub fn check_ssh_command(&self, command_line: &str) -> CmdVerdict {
-        let g = self.inner.lock().unwrap();
-        let head = command_line.trim().split_whitespace().next().unwrap_or("");
-        if head.is_empty() {
-            return CmdVerdict::Deny("empty command");
-        }
-        match g.ssh_command_policy.as_str() {
-            "allowlist" => {
-                if g.ssh_allowed_commands.iter().any(|c| c == head) {
-                    CmdVerdict::Allow
-                } else {
-                    CmdVerdict::Deny("command not in allowlist")
-                }
-            }
-            "denylist" => {
-                if g.ssh_denied_commands.iter().any(|c| c == head) {
-                    CmdVerdict::Deny("command is in denylist")
-                } else {
-                    CmdVerdict::Allow
-                }
-            }
-            _ => CmdVerdict::Allow,
-        }
     }
 }

@@ -82,3 +82,42 @@ export interface Snippet {
   /** Epoch millis, assigned by the server on create. */
   created_at: number;
 }
+
+/** One step of the command guard's decision (see src/guard/mod.rs). */
+export interface GuardCheck {
+  source: 'policy' | 'learned' | 'rules' | 'ai' | 'system_one' | string;
+  outcome: 'pass' | 'raise' | 'block' | 'note' | string;
+  detail: string;
+}
+
+export type ApprovalStatus = 'pending' | 'running' | 'done' | 'failed' | 'rejected' | 'expired';
+
+/** A command waiting for (or decided by) the admin. */
+export interface Approval {
+  id: string;
+  command: string;
+  target: string;
+  origin: 'mcp' | 'rest' | string;
+  status: ApprovalStatus;
+  checks: GuardCheck[];
+  requested_at: number;
+  decided_at: number | null;
+  finished_at: number | null;
+  remembered: boolean;
+  output: string | null;
+  error: string | null;
+  note: string | null;
+}
+
+export interface LearnedCommand {
+  command: string;
+  source: 'ai' | 'admin' | string;
+  reason: string;
+  added_at: number;
+}
+
+export interface GuardDecision {
+  action: 'run' | 'ask' | 'block';
+  checks: GuardCheck[];
+  learned: boolean;
+}

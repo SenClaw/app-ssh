@@ -21,7 +21,7 @@
     "name": "ssh-manager-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "SSH Manager MCP: quản lý host, mở kết nối SSH có trạng thái và chạy lệnh từ xa, thao tác file qua SFTP, và mở/đóng/kiểm tra tunnel port forwarding (ssh -L) với trạng thái thật (đang forward, lỗi gì, bao nhiêu kết nối).",
+    "description": "SSH Manager MCP: quản lý host, mở kết nối SSH có trạng thái và chạy lệnh từ xa, thao tác file qua SFTP, và mở/đóng/kiểm tra tunnel port forwarding (ssh -L) với trạng thái thật (đang forward, lỗi gì, bao nhiêu kết nối). Lệnh chỉ đọc chạy ngay; lệnh nguy hiểm chờ admin duyệt (ssh_command_status đọc kết quả); lệnh lạ được AI và System One kiểm tra.",
     "autoRegister": true
   },
   "skills": [

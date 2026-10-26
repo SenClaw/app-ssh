@@ -2,7 +2,6 @@ use crate::client::SshClient;
 use crate::keychain::{KeychainItem, KeychainStore};
 use crate::logs::{self, LogEntry, LogStore};
 use crate::models::{Host, HostStore};
-use crate::security::CommandFilter;
 use crate::settings::{Settings, SettingsStore};
 use crate::snippets::{Snippet, SnippetStore};
 use axum::{
@@ -35,7 +34,6 @@ pub struct SshExecuteResponse {
 pub struct AppState {
     pub mcp_tx: tokio::sync::broadcast::Sender<String>,
     pub ui_tx: tokio::sync::broadcast::Sender<String>,
-    pub filter: CommandFilter,
     pub hosts: HostStore,
     pub keychain: KeychainStore,
     /// Reusable command snippets shown in the right sidebar.
@@ -47,21 +45,13 @@ pub struct AppState {
     pub rfs: crate::rfs::SftpCache,
     pub log_store: Arc<LogStore>,
     pub settings: Arc<SettingsStore>,
+    /// Decides whether an agent's command runs, waits for the admin or is refused.
+    pub guard: Arc<crate::guard::Guard>,
     /// Stamps and tombstones for syncing the collections with another device.
     pub sync: Arc<crate::sync::SyncState>,
 }
 
 pub fn api_router() -> Router {
-    let allowed_commands_env = std::env::var("ALLOWED_COMMANDS")
-        .unwrap_or_else(|_| "ls,pwd,whoami,df,free,uname,cat,echo,ps,top".to_string());
-
-    let allowed: Vec<String> = allowed_commands_env
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let filter = CommandFilter::new(allowed);
     let data_dir = dirs::home_dir()
         .unwrap()
         .join(".senclaw")
@@ -87,6 +77,10 @@ pub fn api_router() -> Router {
     let log_store = Arc::new(LogStore::new());
     logs::info(&log_store, "system", "boot", None, "SSH Manager started");
     let settings = Arc::new(SettingsStore::new(data_dir.join("settings.json")));
+    let guard = Arc::new(crate::guard::Guard::new(
+        &data_dir,
+        Arc::new(crate::guard::DaemonAdvisor),
+    ));
 
     // Background sweep: prune logs by retention setting every 30s.
     {
@@ -114,7 +108,6 @@ pub fn api_router() -> Router {
     }
 
     let state = Arc::new(AppState {
-        filter,
         hosts,
         keychain,
         snippets,
@@ -126,6 +119,7 @@ pub fn api_router() -> Router {
         rfs: crate::rfs::SftpCache::new(),
         log_store,
         settings,
+        guard,
         sync: sync.clone(),
     });
 
@@ -159,6 +153,7 @@ pub fn api_router() -> Router {
         .route("/logs/stream", get(logs_sse))
         .route("/settings", get(get_settings).put(put_settings))
         .route("/execute", post(execute_command))
+        .nest("/guard", crate::guard::http::router())
         .route("/hosts", get(list_hosts).post(create_host))
         .route("/hosts/:id", put(update_host).delete(delete_host))
         .route("/keychain", get(list_keychain).post(create_keychain))
@@ -254,7 +249,6 @@ async fn execute_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SshExecuteRequest>,
 ) -> Json<SshExecuteResponse> {
-    // CommandFilter is disabled for MCP / AI Agent unrestricted access
     let host_label = format!("{}@{}:{}", payload.user, payload.host, payload.port);
     logs::info(
         &state.log_store,
@@ -263,6 +257,34 @@ async fn execute_command(
         Some(host_label.clone()),
         format!("Execute: {}", payload.command),
     );
+
+    // The same check as the agent's ssh_execute_command: this route runs a
+    // command just as well, so it must not be the way around the guard.
+    let target = crate::remote::Target::Host {
+        host: payload.host.clone(),
+        port: payload.port,
+        user: payload.user.clone(),
+        password: payload.password.clone(),
+        host_id: None,
+    };
+    match crate::guard::http::gate(&state, &payload.command, target, &host_label, "rest").await {
+        crate::guard::http::Gate::Run => {}
+        crate::guard::http::Gate::Wait(a) => {
+            return Json(SshExecuteResponse {
+                output: String::new(),
+                error: Some(format!(
+                    "Not run: waiting for the admin's approval in SSH Manager → Approvals (approval_id {})",
+                    a.id
+                )),
+            });
+        }
+        crate::guard::http::Gate::Refused(d) => {
+            return Json(SshExecuteResponse {
+                output: String::new(),
+                error: Some(format!("Blocked by the command policy: {}", d.why())),
+            });
+        }
+    }
 
     let mut password = payload.password.clone();
     let mut key_pair = None;

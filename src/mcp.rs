@@ -34,7 +34,7 @@ pub struct JsonRpcResponse {
 /// re-issue the same failing call and spin. This spells out exactly what to
 /// pass — and, when a `host_id` was supplied but didn't match, says so instead
 /// of pretending the parameters were simply absent.
-fn missing_connection_params_error(args: &Value, state: &AppState) -> String {
+pub(crate) fn missing_connection_params_error(args: &Value, state: &AppState) -> String {
     let hosts = state.hosts.get_all();
     let known: Vec<String> = hosts
         .iter()
@@ -285,7 +285,7 @@ pub async fn mcp_message(
                 },
                 {
                     "name": "ssh_execute_command",
-                    "description": "Execute a shell command on a specific SSH host or active connection_id.",
+                    "description": "Execute a shell command on a specific SSH host or active connection_id. Commands are checked first: read-only ones run at once, risky ones (delete, restart, install, change permissions, read secrets, ...) are NOT run but wait for the admin's approval — the reply then starts with 'NOT RUN YET' and gives an approval_id to pass to ssh_command_status. Never reword a command to get around the check.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -299,7 +299,12 @@ pub async fn mcp_message(
                         },
                         "required": ["command"]
                     }
-                }                ,
+                },
+                {
+                    "name": "ssh_command_status",
+                    "description": "Status of a command that is waiting for the admin's approval (the approval_id from ssh_execute_command). Returns JSON: status is pending, running, done, failed, rejected or expired; once done, `output` holds what the command printed. To wait, arm schedule_watch on this tool until status is done, failed, rejected or expired instead of calling it in a loop.",
+                    "inputSchema": { "type": "object", "properties": { "approval_id": { "type": "string", "description": "approval_id from ssh_execute_command" } }, "required": ["approval_id"] }
+                },
                 {
                     "name": "sftp_list_directory",
                     "description": "List contents of a directory over SFTP.",
@@ -450,6 +455,10 @@ pub async fn mcp_message(
                 let cmd = args["command"].as_str().unwrap_or("");
                 format!("exec: {}", cmd)
             }
+            "ssh_command_status" => format!(
+                "approval status {}",
+                args["approval_id"].as_str().unwrap_or("?")
+            ),
             "ssh_start_connect" => "open connection (explicit params)".to_string(),
             "ssh_start_connect_id" => format!(
                 "open connection (host_id={})",
@@ -493,7 +502,7 @@ pub async fn mcp_message(
             _ => format!("call: {}", name),
         };
 
-        crate::logs::info(&state.log_store, "mcp", name, host_label, detail);
+        crate::logs::info(&state.log_store, "mcp", name, host_label.clone(), detail);
 
         if name == "ssh_list_hosts" {
             let hosts = state.hosts.get_all();
@@ -742,126 +751,55 @@ pub async fn mcp_message(
         }
 
         if name == "ssh_execute_command" {
-            let args = &params["arguments"];
             let command = args["command"].as_str().unwrap_or("").to_string();
-
-            // Apply user-configured command policy.
-            if let crate::settings::CmdVerdict::Deny(reason) =
-                state.settings.check_ssh_command(&command)
-            {
-                crate::logs::warn(
-                    &state.log_store,
-                    "mcp",
-                    "ssh_execute_command",
-                    None,
-                    format!("Blocked command '{}': {}", command, reason),
-                );
-                let result = json!({
-                    "isError": true,
-                    "content": [{ "type": "text",
-                        "text": format!("Command '{}' blocked by user settings: {}", command, reason) }]
-                });
-                let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
-                let _ = state.mcp_tx.send(resp.to_string());
-                return Json(resp);
-            }
-
-            if let Some(conn_id) = args["connection_id"].as_str() {
-                if let Some(client_arc) = state.connections.get(conn_id).await {
-                    let mut client = client_arc.lock().await;
-                    let output = client
-                        .execute(&command)
-                        .await
-                        .unwrap_or_else(|e| format!("Error executing: {}", e));
-
-                    let _ = state.ui_tx.send(
-                        json!({
-                            "type": "mcp_execute",
-                            "host_id": client.host_id,
-                            "command": command,
-                            "output": output
-                        })
-                        .to_string(),
-                    );
-
-                    let result = json!({ "content": [{ "type": "text", "text": output }
-
-] });
-                    let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
-                    let _ = state.mcp_tx.send(resp.to_string());
-                    return Json(resp);
-                } else {
-                    let result = json!({ "isError": true, "content": [{ "type": "text", "text": "Connection not found." }
-
-] });
-                    let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
+            // Where it would run comes first: an approval the admin cannot act
+            // on (a closed connection, missing credentials) helps nobody.
+            let target = match crate::remote::Target::from_args(&state, args).await {
+                Ok(t) => t,
+                Err(text) => {
+                    let resp = tool_reply(req.id, text, true);
                     let _ = state.mcp_tx.send(resp.to_string());
                     return Json(resp);
                 }
-            } else {
-                let mut host = args["host"].as_str().map(|s| s.to_string());
-                let mut port = args["port"].as_u64().map(|n| n as u16);
-                let mut user = args["user"].as_str().map(|s| s.to_string());
-                let mut password = args["password"].as_str().map(|s| s.to_string());
-
-                if let Some(host_id) = args["host_id"].as_str() {
-                    if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id)
-                    {
-                        if host.is_none() {
-                            host = Some(saved.host.clone());
-                        }
-                        if port.is_none() {
-                            port = Some(saved.port);
-                        }
-                        if user.is_none() {
-                            user = Some(saved.user.clone());
-                        }
-                        if password.is_none() {
-                            password = saved.password.clone();
-                        }
-                    }
+            };
+            let target_label = host_label.clone().unwrap_or_else(|| "unknown host".to_string());
+            let resp = match crate::guard::http::gate(&state, &command, target.clone(), &target_label, "mcp").await {
+                crate::guard::http::Gate::Run => match crate::remote::run(&state, &target, &command).await {
+                    Ok(output) => tool_reply(req.id, output, false),
+                    Err(e) => tool_reply(req.id, e, true),
+                },
+                crate::guard::http::Gate::Wait(a) => {
+                    tool_reply(req.id, crate::guard::http::pending_text(&a), false)
                 }
+                crate::guard::http::Gate::Refused(d) => tool_reply(
+                    req.id,
+                    format!("Command '{}' blocked by user settings: {}", command, d.why()),
+                    true,
+                ),
+            };
+            let _ = state.mcp_tx.send(resp.to_string());
+            return Json(resp);
+        }
 
-                if host.is_none() || user.is_none() || port.is_none() {
-                    let text = missing_connection_params_error(args, &state);
-                    let result =
-                        json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
-                    let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
-                    let _ = state.mcp_tx.send(resp.to_string());
-                    return Json(resp);
-                }
-
-                let mut client = match crate::client::SshClient::connect(
-                    &host.unwrap(),
-                    port.unwrap(),
-                    &user.unwrap(),
-                    password.as_deref(),
-                    None,
-                    args["host_id"].as_str().map(|s| s.to_string()),
-                )
-                .await
-                {
-                    Ok(c) => c,
-                    Err(e) => {
-                        let resp = json!({
-                            "jsonrpc": "2.0", "id": req.id,
-                            "result": { "isError": true, "content": [{ "type": "text", "text": format!("Error: {}", e) }] }
-                        });
-                        let _ = state.mcp_tx.send(resp.to_string());
-                        return Json(resp);
-                    }
-                };
-                let output = client
-                    .execute(&command)
-                    .await
-                    .unwrap_or_else(|e| format!("Error executing: {}", e));
-                let resp = json!({
-                    "jsonrpc": "2.0", "id": req.id,
-                    "result": { "content": [{ "type": "text", "text": output }] }
-                });
-                let _ = state.mcp_tx.send(resp.to_string());
-                return Json(resp);
-            }
+        if name == "ssh_command_status" {
+            let id = args["approval_id"].as_str().unwrap_or("").trim();
+            let resp = match state.guard.approvals.get(id) {
+                Some(a) => tool_reply(
+                    req.id,
+                    serde_json::to_string_pretty(&crate::guard::http::status_json(&a))
+                        .unwrap_or_default(),
+                    false,
+                ),
+                None => tool_reply(
+                    req.id,
+                    format!(
+                        "No approval request with id '{id}'. Requests live in memory only, so an SSH Manager restart forgets them; send the command again if it is still needed."
+                    ),
+                    true,
+                ),
+            };
+            let _ = state.mcp_tx.send(resp.to_string());
+            return Json(resp);
         }
 
         // ── Port forwarding ─────────────────────────────────────────────────
